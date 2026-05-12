@@ -6,8 +6,8 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Aster/a/",
-    "version": "0.1.0",
-    "homePage": "https://github.com/SillyTavern/SillyTavern",
+    "version": "0.6.7",
+    "homePage": "https://github.com/stellvt/silly-linkify",
     "auto_update": false,
     "minimum_client_version": "1.15.0"
 }
