@@ -1,0 +1,13 @@
+{
+    "display_name": "Silly Linkify",
+    "loading_order": 1000,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Aster/a/",
+    "version": "0.1.0",
+    "homePage": "https://github.com/SillyTavern/SillyTavern",
+    "auto_update": false,
+    "minimum_client_version": "1.15.0"
+}

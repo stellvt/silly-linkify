@@ -1,0 +1,126 @@
+<div class="silly-linkify-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Silly Linkify</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="silly-linkify-topbar">
+                <label class="checkbox_label" for="silly_linkify_enabled">
+                    <input id="silly_linkify_enabled" type="checkbox">
+                    <span>Enabled</span>
+                </label>
+                <label class="checkbox_label" for="silly_linkify_debug">
+                    <input id="silly_linkify_debug" type="checkbox">
+                    <span>Debug</span>
+                </label>
+                <span class="silly-linkify-spacer"></span>
+                <button id="silly_linkify_new" class="menu_button interactable" type="button">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>New link</span>
+                </button>
+                <button id="silly_linkify_export" class="menu_button menu_button_icon interactable" title="Export links" type="button">
+                    <i class="fa-solid fa-file-export"></i>
+                </button>
+                <button id="silly_linkify_import" class="menu_button menu_button_icon interactable" title="Import links" type="button">
+                    <i class="fa-solid fa-file-import"></i>
+                </button>
+                <input id="silly_linkify_import_file" type="file" accept=".json" hidden>
+            </div>
+
+            <div id="silly_linkify_recipes" class="silly-linkify-recipes"></div>
+        </div>
+    </div>
+
+    <div id="silly_linkify_modal" class="silly-linkify-modal displayNone">
+        <div id="silly_linkify_modal_scrim" class="silly-linkify-modal-scrim"></div>
+        <div id="silly_linkify_editor" class="silly-linkify-modal-panel">
+            <div class="silly-linkify-modal-head">
+                <div class="silly-linkify-title-stack">
+                    <strong>Link editor</strong>
+                    <span>Build a state link from conditions and results.</span>
+                </div>
+                <button id="silly_linkify_close_editor" class="menu_button menu_button_icon interactable" title="Close" type="button">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="silly-linkify-editor-head">
+                <input id="silly_linkify_recipe_name" class="text_pole" type="text" placeholder="Link name">
+                <label class="checkbox_label" for="silly_linkify_recipe_enabled">
+                    <input id="silly_linkify_recipe_enabled" type="checkbox">
+                    <span>On</span>
+                </label>
+                <label class="checkbox_label" for="silly_linkify_auto_inverse">
+                    <input id="silly_linkify_auto_inverse" type="checkbox">
+                    <span>Auto inverse</span>
+                </label>
+                <button id="silly_linkify_run" class="menu_button menu_button_icon interactable" title="Run Then blocks" type="button">
+                    <i class="fa-solid fa-play"></i>
+                </button>
+                <button id="silly_linkify_duplicate" class="menu_button menu_button_icon interactable" title="Duplicate" type="button">
+                    <i class="fa-solid fa-copy"></i>
+                </button>
+                <button id="silly_linkify_delete" class="menu_button menu_button_icon interactable" title="Delete" type="button">
+                    <i class="fa-solid fa-trash-can"></i>
+                </button>
+            </div>
+
+            <div class="silly-linkify-chain">
+                <section class="silly-linkify-zone">
+                    <div class="silly-linkify-zone-title">
+                        <i class="fa-solid fa-circle-question"></i>
+                        <span>When</span>
+                    </div>
+                    <div id="silly_linkify_when_blocks" class="silly-linkify-blocks"></div>
+                </section>
+
+                <div class="silly-linkify-chain-arrow">
+                    <i class="fa-solid fa-arrow-right"></i>
+                </div>
+
+                <section class="silly-linkify-zone">
+                    <div class="silly-linkify-zone-title">
+                        <i class="fa-solid fa-bolt"></i>
+                        <span>Then</span>
+                    </div>
+                    <div id="silly_linkify_then_blocks" class="silly-linkify-blocks"></div>
+                </section>
+            </div>
+
+            <div class="silly-linkify-builder">
+                <div class="silly-linkify-builder-head">
+                    <strong>Add block</strong>
+                    <div id="silly_linkify_block_mode" class="silly-linkify-mode-toggle" data-mode="condition" role="group" aria-label="Block destination">
+                        <button class="menu_button interactable selected" data-mode="condition" type="button">When</button>
+                        <button class="menu_button interactable" data-mode="result" type="button">Then</button>
+                    </div>
+                </div>
+                <div class="silly-linkify-builder-grid">
+                    <label class="silly-linkify-builder-item">
+                        <span><i class="fa-solid fa-layer-group"></i> Category</span>
+                        <select id="silly_linkify_block_category" class="text_pole" title="Category"></select>
+                    </label>
+                    <label class="silly-linkify-builder-item">
+                        <span><i class="fa-solid fa-cube"></i> Block</span>
+                        <select id="silly_linkify_block_adapter" class="text_pole" title="Block type"></select>
+                    </label>
+                    <div id="silly_linkify_block_target_wrap" class="silly-linkify-builder-item"></div>
+                    <div id="silly_linkify_block_value_wrap" class="silly-linkify-builder-item"></div>
+                    <button id="silly_linkify_add_block" class="menu_button interactable silly-linkify-add-block" type="button">
+                        <i class="fa-solid fa-circle-plus"></i>
+                        <span>Add block</span>
+                    </button>
+                </div>
+            </div>
+
+            <details class="silly-linkify-advanced">
+                <summary>Advanced JSON</summary>
+                <textarea id="silly_linkify_recipe_json" class="text_pole" rows="12" spellcheck="false"></textarea>
+                <div class="silly-linkify-advanced-actions">
+                    <button id="silly_linkify_apply_json" class="menu_button interactable" type="button">Apply JSON</button>
+                </div>
+            </details>
+        </div>
+    </div>
+</div>
