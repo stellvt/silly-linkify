@@ -216,6 +216,92 @@ function getCurrentPresetOptions() {
     return getSelectOptions(fallbackSelect);
 }
 
+const presetParameterDefinitions = [
+    {
+        id: 'temperature',
+        label: 'Temperature',
+        type: 'number',
+        selectors: {
+            openai: '#temp_openai',
+            textgenerationwebui: '#temp_textgenerationwebui',
+            kobold: '#temp',
+            koboldhorde: '#temp',
+            novel: '#temp_novel',
+        },
+    },
+    {
+        id: 'top_p',
+        label: 'Top P',
+        type: 'number',
+        selectors: {
+            openai: '#top_p_openai',
+            textgenerationwebui: '#top_p_textgenerationwebui',
+            kobold: '#top_p',
+            koboldhorde: '#top_p',
+            novel: '#top_p_novel',
+        },
+    },
+    {
+        id: 'top_k',
+        label: 'Top K',
+        type: 'number',
+        selectors: {
+            openai: '#top_k_openai',
+            textgenerationwebui: '#top_k_textgenerationwebui',
+            kobold: '#top_k',
+            koboldhorde: '#top_k',
+            novel: '#top_k_novel',
+        },
+    },
+    {
+        id: 'repetition_penalty',
+        label: 'Repetition penalty',
+        type: 'number',
+        selectors: {
+            openai: '#repetition_penalty_openai',
+            textgenerationwebui: '#rep_pen_textgenerationwebui',
+            kobold: '#rep_pen',
+            koboldhorde: '#rep_pen',
+            novel: '#rep_pen_novel',
+        },
+    },
+    {
+        id: 'streaming',
+        label: 'Streaming',
+        type: 'boolean',
+        selectors: {
+            openai: '#stream_toggle',
+            textgenerationwebui: '#streaming_textgenerationwebui',
+            kobold: '#streaming_kobold',
+            koboldhorde: '#streaming_kobold',
+            novel: '#streaming_novel',
+        },
+    },
+];
+
+function getCurrentApiId() {
+    return String(getContext().mainApi || '');
+}
+
+function getPresetParameterDefinition(target) {
+    const id = typeof target === 'object' ? target?.id : target;
+    return presetParameterDefinitions.find(parameter => parameter.id === id) ?? null;
+}
+
+function getPresetParameterSelector(target) {
+    const parameter = getPresetParameterDefinition(target);
+    if (!parameter) {
+        return '';
+    }
+    return parameter.selectors[getCurrentApiId()] || '';
+}
+
+function getPresetParameterTargets() {
+    return presetParameterDefinitions
+        .filter(parameter => !!getPresetParameterSelector(parameter.id))
+        .map(parameter => makeTarget(parameter.id, parameter.label, { type: parameter.type }));
+}
+
 function getModelSelectSelector(source = oai_settings.chat_completion_source) {
     const selectors = {
         openai: '#model_openai_select',
@@ -466,6 +552,31 @@ registerAdapter({
     },
     invert: block => ({ ...block, value: !parseBoolean(block.value) }),
     describe: block => `Prompt "${getBlockTargetLabel(block)}" = ${stringifyValue(block.value)}`,
+});
+
+registerAdapter({
+    id: 'preset.parameter',
+    category: 'preset',
+    label: 'Preset parameter',
+    icon: 'fa-sliders',
+    writable: true,
+    reversible: true,
+    targetCaption: 'Parameter',
+    valueType: 'text',
+    getValueType: target => getPresetParameterDefinition(target)?.type || 'text',
+    listTargets: () => getPresetParameterTargets(),
+    read: block => {
+        const selector = getPresetParameterSelector(block.target);
+        return selector ? getDomValue(selector) : undefined;
+    },
+    write: block => {
+        const selector = getPresetParameterSelector(block.target);
+        return selector ? setDomValue(selector, block.value) : false;
+    },
+    invert: block => getPresetParameterDefinition(block.target)?.type === 'boolean'
+        ? { ...block, value: !parseBoolean(block.value) }
+        : null,
+    describe: block => `Preset ${getBlockTargetLabel(block)} = ${stringifyValue(block.value)}`,
 });
 
 registerAdapter({
@@ -1108,6 +1219,16 @@ function getBuilderAdapter() {
     return getAdapter(String($('#silly_linkify_block_adapter').val() || ''));
 }
 
+function getAdapterValueType(adapter, target = undefined) {
+    if (!adapter) {
+        return 'text';
+    }
+    if (typeof adapter.getValueType === 'function') {
+        return adapter.getValueType(target ?? getBuilderTarget(adapter));
+    }
+    return adapter.valueType || 'text';
+}
+
 function getBuilderMode() {
     return String($('#silly_linkify_block_mode').attr('data-mode') || 'condition');
 }
@@ -1169,7 +1290,9 @@ function renderValuePicker() {
         return;
     }
 
-    if (adapter.valueType === 'boolean') {
+    const valueType = getAdapterValueType(adapter);
+
+    if (valueType === 'boolean') {
         const selectedValue = draft?.adapter === adapter.id ? String(parseBoolean(draft.value)) : 'true';
         valueWrap.html(`
             <span><i class="fa-solid fa-toggle-on"></i> State</span>
@@ -1181,7 +1304,7 @@ function renderValuePicker() {
         return;
     }
 
-    if (adapter.valueType === 'select') {
+    if (valueType === 'select') {
         const values = adapter.listValues?.(getBuilderTarget(adapter)) ?? [];
         const currentValue = draft?.adapter === adapter.id
             ? String(draft.value ?? '')
@@ -1196,6 +1319,14 @@ function renderValuePicker() {
                 ${values.map(value => `<option value="${escapeHtml(value.id)}" ${String(value.id) === currentValue ? 'selected' : ''}>${escapeHtml(value.label)}</option>`).join('')}
             </select>
         `);
+        return;
+    }
+
+    if (valueType === 'number') {
+        const currentValue = draft?.adapter === adapter.id
+            ? draft.value
+            : readCurrentBuilderTarget(adapter);
+        valueWrap.html(`<span><i class="fa-solid fa-circle-dot"></i> Value</span><input id="silly_linkify_block_value" class="text_pole" type="number" step="any" placeholder="Value" value="${escapeHtml(currentValue ?? '')}">`);
         return;
     }
 
@@ -1260,8 +1391,13 @@ function readCurrentBuilderTarget(adapter) {
 
 function getBuilderValue(adapter) {
     const value = $('#silly_linkify_block_value').val();
-    if (adapter.valueType === 'boolean') {
+    const valueType = getAdapterValueType(adapter);
+    if (valueType === 'boolean') {
         return parseBoolean(value);
+    }
+    if (valueType === 'number') {
+        const numericValue = Number(value);
+        return Number.isFinite(numericValue) ? numericValue : value;
     }
     return value;
 }
