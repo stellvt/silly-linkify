@@ -1,10 +1,12 @@
 import {
     characters,
+    chat_metadata,
     eventSource,
     event_types,
     getCurrentChatId,
     getThumbnailUrl,
     reloadCurrentChat,
+    saveMetadata,
     saveSettingsDebounced,
     selectCharacterById,
 } from '../../../../script.js';
@@ -13,9 +15,24 @@ import {
     renderExtensionTemplateAsync,
 } from '../../../extensions.js';
 import { getChatCompletionModel, oai_settings, promptManager } from '../../../openai.js';
+import { power_user } from '../../../power-user.js';
 import { getPresetManager } from '../../../preset-manager.js';
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
-import { download, getFileText, uuidv4 } from '../../../utils.js';
+import { download, getCharaFilename, getFileText, uuidv4 } from '../../../utils.js';
+import {
+    charSetAuxWorlds,
+    charUpdatePrimaryWorld,
+    getWorldInfoSettings,
+    loadWorldInfo,
+    METADATA_KEY,
+    openWorldInfoEditor,
+    saveWorldInfo,
+    selected_world_info,
+    setWIOriginalDataValue,
+    updateWorldInfoSettings,
+    world_info,
+    world_names,
+} from '../../../world-info.js';
 import {
     getRegexScripts,
     getScriptsByType,
@@ -50,6 +67,8 @@ const runtime = {
         condition: null,
         result: null,
     },
+    lorebookEntryTargets: [],
+    lorebookEntryTargetsLoading: false,
 };
 
 const categories = [
@@ -57,6 +76,8 @@ const categories = [
     { id: 'regex', label: 'Regex', icon: 'fa-code' },
     { id: 'character', label: 'Character / Chat', icon: 'fa-address-card' },
     { id: 'api', label: 'API / Model', icon: 'fa-plug' },
+    { id: 'theme', label: 'Theme', icon: 'fa-palette' },
+    { id: 'lorebook', label: 'Lorebook', icon: 'fa-book' },
     { id: 'quickReply', label: 'Quick Reply', icon: 'fa-reply' },
     { id: 'custom', label: 'Custom', icon: 'fa-wand-magic-sparkles' },
 ];
@@ -200,6 +221,133 @@ function getSelectOptions(selectorOrElement, fallback = []) {
         .filter(option => String(option.id ?? '').length > 0);
 
     return options.length ? options : fallback;
+}
+
+function getThemeOptions() {
+    return getSelectOptions('#themes', power_user.theme ? [makeTarget(power_user.theme, power_user.theme)] : []);
+}
+
+function getLorebookOptions(includeNone = false) {
+    const options = (world_names ?? []).map(name => makeTarget(name, name));
+    return includeNone ? [makeTarget('', 'None'), ...options] : options;
+}
+
+function getLorebookLabel(value) {
+    return value ? String(value) : 'None';
+}
+
+function getCurrentCharacter() {
+    return characters[Number(getContext().characterId)] ?? null;
+}
+
+function getCurrentCharacterFileName() {
+    const characterId = Number(getContext().characterId);
+    if (!Number.isFinite(characterId)) {
+        return '';
+    }
+    try {
+        return getCharaFilename(characterId);
+    } catch {
+        return getCurrentCharacter()?.avatar || '';
+    }
+}
+
+function getCurrentCharacterExtraLorebooks() {
+    const fileName = getCurrentCharacterFileName();
+    if (!fileName) {
+        return [];
+    }
+    return world_info.charLore?.find(entry => entry.name === fileName)?.extraBooks ?? [];
+}
+
+function setWorldInfoSelectValues(values) {
+    const selected = new Set(values);
+    $('#world_info option').each((_, option) => {
+        const index = Number(option.value);
+        const name = (world_names ?? [])[index];
+        option.selected = selected.has(name);
+    });
+}
+
+function setGlobalLorebookEnabled(name, enabled) {
+    if (!name || !(world_names ?? []).includes(name)) {
+        warn(`Lorebook not found: ${name}`);
+        return false;
+    }
+
+    const next = selected_world_info.filter(book => book !== name);
+    if (enabled) {
+        next.push(name);
+    }
+
+    if (selected_world_info.length === next.length && selected_world_info.every((book, index) => book === next[index])) {
+        return false;
+    }
+
+    updateWorldInfoSettings(getWorldInfoSettings(), next);
+    setWorldInfoSelectValues(next);
+    eventSource.emit(event_types.WORLDINFO_SETTINGS_UPDATED);
+    return false;
+}
+
+function getOpenLorebookName() {
+    const selectedIndex = Number($('#world_editor_select').val());
+    return Number.isFinite(selectedIndex) ? (world_names ?? [])[selectedIndex] || '' : '';
+}
+
+function getLorebookEntryLabel(entry) {
+    const keys = Array.isArray(entry.key) ? entry.key.filter(Boolean).join(', ') : '';
+    const comment = String(entry.comment || '').trim();
+    return comment || keys || `Entry ${entry.uid}`;
+}
+
+function getLorebookEntryTargetId(book, uid) {
+    return `${book}::${uid}`;
+}
+
+function parseLorebookEntryTarget(target) {
+    if (typeof target === 'object') {
+        return {
+            book: target.book || String(target.id || '').split('::')[0],
+            uid: target.uid ?? String(target.id || '').split('::').slice(1).join('::'),
+        };
+    }
+
+    const [book, ...uidParts] = String(target || '').split('::');
+    return { book, uid: uidParts.join('::') };
+}
+
+function findLorebookEntry(data, uid) {
+    if (!data?.entries) {
+        return null;
+    }
+    return data.entries[uid] ?? Object.values(data.entries).find(entry => String(entry.uid) === String(uid)) ?? null;
+}
+
+async function refreshLorebookEntryTargets() {
+    if (runtime.lorebookEntryTargetsLoading || !world_names?.length) {
+        return;
+    }
+
+    runtime.lorebookEntryTargetsLoading = true;
+    try {
+        const books = await Promise.all((world_names ?? []).map(async name => {
+            try {
+                return { name, data: await loadWorldInfo(name) };
+            } catch (error) {
+                console.warn('[Silly Linkify] Failed to load lorebook entries', name, error);
+                return { name, data: null };
+            }
+        }));
+
+        runtime.lorebookEntryTargets = books.flatMap(({ name, data }) => Object.values(data?.entries ?? {}).map(entry => makeTarget(
+            getLorebookEntryTargetId(name, entry.uid),
+            `${name}: ${getLorebookEntryLabel(entry)}`,
+            { book: name, uid: entry.uid },
+        )));
+    } finally {
+        runtime.lorebookEntryTargetsLoading = false;
+    }
 }
 
 function getCurrentPresetOptions() {
@@ -485,8 +633,42 @@ function stringifyValue(value) {
     return String(value ?? '');
 }
 
-function invertBlock(block) {
+function getBlockSnapshotKey(block) {
     const adapter = getAdapter(block.adapter);
+    const targetId = adapter?.snapshotKey?.(block) ?? builderTargetId(block.target);
+    return `${block.adapter}:${targetId}`;
+}
+
+async function captureResultSnapshots(blocks) {
+    const snapshots = {};
+    const applied = {};
+
+    for (const block of blocks) {
+        const adapter = getAdapter(block.adapter);
+        if (!adapter?.snapshotBeforeApply || !adapter.read) {
+            continue;
+        }
+
+        const key = getBlockSnapshotKey(block);
+        snapshots[key] = await readBlock(block);
+        applied[key] = block.value;
+    }
+
+    return { snapshots, applied };
+}
+
+function invertBlock(block, appliedState = {}) {
+    const adapter = getAdapter(block.adapter);
+    const snapshotKey = getBlockSnapshotKey(block);
+    if (adapter?.snapshotBeforeApply && Object.hasOwn(appliedState.snapshots ?? {}, snapshotKey)) {
+        return {
+            ...block,
+            value: appliedState.snapshots[snapshotKey],
+            snapshotRestore: true,
+            snapshotAppliedValue: appliedState.applied?.[snapshotKey] ?? block.value,
+        };
+    }
+
     if (!adapter?.invert) {
         return null;
     }
@@ -502,6 +684,187 @@ async function runSlash(command, value, namedArgs = {}) {
         source: 'Silly Linkify',
     });
 }
+
+registerAdapter({
+    id: 'theme.active',
+    category: 'theme',
+    label: 'Active theme',
+    icon: 'fa-palette',
+    writable: true,
+    valueType: 'select',
+    snapshotBeforeApply: true,
+    listTargets: () => [makeTarget('active', 'Active theme')],
+    listValues: () => getThemeOptions(),
+    read: () => power_user.theme ?? '',
+    write: block => setDomValue('#themes', block.value),
+    describe: block => `Theme is "${stringifyValue(block.value)}"`,
+});
+
+registerAdapter({
+    id: 'lorebook.global',
+    category: 'lorebook',
+    label: 'Global lorebook',
+    icon: 'fa-book',
+    writable: true,
+    reversible: true,
+    valueType: 'boolean',
+    listTargets: () => getLorebookOptions(),
+    read: block => selected_world_info.includes(block.target?.id ?? block.target),
+    write: block => setGlobalLorebookEnabled(block.target?.id ?? block.target, parseBoolean(block.value)),
+    invert: block => ({ ...block, value: !parseBoolean(block.value) }),
+    describe: block => `Global lorebook "${getBlockTargetLabel(block)}" = ${stringifyValue(block.value)}`,
+});
+
+registerAdapter({
+    id: 'lorebook.chat',
+    category: 'lorebook',
+    label: 'Chat lorebook',
+    icon: 'fa-comments',
+    writable: true,
+    valueType: 'select',
+    snapshotBeforeApply: true,
+    listTargets: () => [makeTarget('chat', 'Current chat lorebook')],
+    listValues: () => getLorebookOptions(true),
+    read: () => chat_metadata[METADATA_KEY] ?? '',
+    write: async block => {
+        const next = String(block.value || '');
+        if (next && !(world_names ?? []).includes(next)) {
+            warn(`Lorebook not found: ${next}`);
+            return false;
+        }
+        if (String(chat_metadata[METADATA_KEY] ?? '') === next) {
+            return false;
+        }
+        if (next) {
+            chat_metadata[METADATA_KEY] = next;
+        } else {
+            delete chat_metadata[METADATA_KEY];
+        }
+        $('.chat_lorebook_button').toggleClass('world_set', !!next);
+        await saveMetadata();
+        await eventSource.emit(event_types.WORLDINFO_SETTINGS_UPDATED);
+        return false;
+    },
+    describe: block => `Chat lorebook = "${getLorebookLabel(block.value)}"`,
+});
+
+registerAdapter({
+    id: 'lorebook.characterPrimary',
+    category: 'lorebook',
+    label: 'Character main lorebook',
+    icon: 'fa-address-book',
+    writable: true,
+    valueType: 'select',
+    snapshotBeforeApply: true,
+    listTargets: () => getCurrentCharacter() ? [makeTarget('current', 'Current character main lorebook')] : [],
+    listValues: () => getLorebookOptions(true),
+    read: () => getCurrentCharacter()?.data?.extensions?.world ?? '',
+    write: async block => {
+        const next = String(block.value || '');
+        if (next && !(world_names ?? []).includes(next)) {
+            warn(`Lorebook not found: ${next}`);
+            return false;
+        }
+        if (String(getCurrentCharacter()?.data?.extensions?.world ?? '') === next) {
+            return false;
+        }
+        await charUpdatePrimaryWorld(next);
+        await eventSource.emit(event_types.WORLDINFO_SETTINGS_UPDATED);
+        return false;
+    },
+    describe: block => `Character main lorebook = "${getLorebookLabel(block.value)}"`,
+});
+
+registerAdapter({
+    id: 'lorebook.characterExtra',
+    category: 'lorebook',
+    label: 'Character extra lorebook',
+    icon: 'fa-bookmark',
+    writable: true,
+    reversible: true,
+    valueType: 'boolean',
+    listTargets: () => getCurrentCharacter() ? getLorebookOptions() : [],
+    read: block => getCurrentCharacterExtraLorebooks().includes(block.target?.id ?? block.target),
+    write: block => {
+        const book = block.target?.id ?? block.target;
+        const fileName = getCurrentCharacterFileName();
+        if (!fileName || !book || !(world_names ?? []).includes(book)) {
+            warn(`Lorebook not found: ${book}`);
+            return false;
+        }
+        const current = getCurrentCharacterExtraLorebooks();
+        const enabled = parseBoolean(block.value);
+        const next = enabled
+            ? Array.from(new Set([...current, book]))
+            : current.filter(name => name !== book);
+        if (current.length === next.length && current.every((name, index) => name === next[index])) {
+            return false;
+        }
+        charSetAuxWorlds(fileName, next);
+        eventSource.emit(event_types.WORLDINFO_SETTINGS_UPDATED);
+        return false;
+    },
+    invert: block => ({ ...block, value: !parseBoolean(block.value) }),
+    describe: block => `Character extra lorebook "${getBlockTargetLabel(block)}" = ${stringifyValue(block.value)}`,
+});
+
+registerAdapter({
+    id: 'lorebook.entryEnabled',
+    category: 'lorebook',
+    label: 'Lorebook entry',
+    icon: 'fa-list-check',
+    writable: true,
+    reversible: true,
+    valueType: 'boolean',
+    listTargets: () => runtime.lorebookEntryTargets,
+    read: async block => {
+        const { book, uid } = parseLorebookEntryTarget(block.target);
+        const data = book ? await loadWorldInfo(book) : null;
+        const entry = findLorebookEntry(data, uid);
+        return entry ? !entry.disable : undefined;
+    },
+    write: async block => {
+        const { book, uid } = parseLorebookEntryTarget(block.target);
+        const data = book ? await loadWorldInfo(book) : null;
+        const entry = findLorebookEntry(data, uid);
+        if (!entry) {
+            warn(`Lorebook entry not found: ${getBlockTargetLabel(block)}`);
+            return false;
+        }
+        const nextEnabled = parseBoolean(block.value);
+        const currentEnabled = !entry.disable;
+        if (currentEnabled === nextEnabled) {
+            return false;
+        }
+        entry.disable = !nextEnabled;
+        setWIOriginalDataValue(data, entry.uid, 'enabled', nextEnabled);
+        await saveWorldInfo(book, data);
+        return false;
+    },
+    invert: block => ({ ...block, value: !parseBoolean(block.value) }),
+    describe: block => `Lorebook entry "${getBlockTargetLabel(block)}" = ${stringifyValue(block.value)}`,
+});
+
+registerAdapter({
+    id: 'lorebook.openEditor',
+    category: 'lorebook',
+    label: 'Open lorebook editor',
+    icon: 'fa-book-open',
+    writable: true,
+    valueType: 'select',
+    listTargets: () => [makeTarget('editor', 'Lorebook editor')],
+    listValues: () => getLorebookOptions(),
+    read: () => getOpenLorebookName(),
+    write: block => {
+        if (!(world_names ?? []).includes(String(block.value || ''))) {
+            warn(`Lorebook not found: ${block.value}`);
+            return false;
+        }
+        openWorldInfoEditor(block.value);
+        return false;
+    },
+    describe: block => `Open lorebook "${getLorebookLabel(block.value)}"`,
+});
 
 registerAdapter({
     id: 'preset.active',
@@ -928,6 +1291,13 @@ async function applyBlocks(blocks) {
     let shouldReload = false;
     for (const block of blocks) {
         try {
+            if (block.snapshotRestore) {
+                const actual = await readBlock(block);
+                if (!valuesEqual(actual, block.snapshotAppliedValue)) {
+                    logDebug('Skipping snapshot restore because user changed the value', block, actual);
+                    continue;
+                }
+            }
             await writeBlock(block);
             shouldReload = shouldReload || !!block.reloadChat || !!getAdapter(block.adapter)?.reloadsChat;
         } catch (error) {
@@ -950,10 +1320,16 @@ async function evaluateRecipe(recipe) {
     const wasActive = runtime.activeRecipes.has(recipe.id);
 
     if (active && !wasActive) {
+        const appliedState = await captureResultSnapshots(recipe.results);
         runtime.activeRecipes.add(recipe.id);
         await applyBlocks(recipe.results);
         showLinkApplied(recipe);
-        getSettings().lastApplied[recipe.id] = Date.now();
+        getSettings().lastApplied[recipe.id] = {
+            active: true,
+            at: Date.now(),
+            snapshots: appliedState.snapshots,
+            applied: appliedState.applied,
+        };
         saveSettings();
         return;
     }
@@ -961,9 +1337,12 @@ async function evaluateRecipe(recipe) {
     if (!active && wasActive) {
         runtime.activeRecipes.delete(recipe.id);
         if (recipe.autoInverse) {
-            const inverseBlocks = recipe.results.map(invertBlock).filter(Boolean);
+            const appliedState = getSettings().lastApplied[recipe.id] ?? {};
+            const inverseBlocks = recipe.results.map(block => invertBlock(block, appliedState)).filter(Boolean);
             await applyBlocks(inverseBlocks);
         }
+        delete getSettings().lastApplied[recipe.id];
+        saveSettings();
     }
 }
 
@@ -1658,10 +2037,21 @@ function subscribeToEvents() {
         event_types.SETTINGS_UPDATED,
         event_types.CHARACTER_PAGE_LOADED,
         event_types.CHARACTER_EDITED,
+        event_types.WORLDINFO_SETTINGS_UPDATED,
+        event_types.WORLDINFO_UPDATED,
+        event_types.WORLDINFO_ENTRIES_LOADED,
     ].filter(Boolean);
 
     for (const eventType of events) {
-        eventSource.on(eventType, () => scheduleEvaluation());
+        eventSource.on(eventType, () => {
+            if ([event_types.WORLDINFO_UPDATED, event_types.WORLDINFO_ENTRIES_LOADED].includes(eventType)) {
+                refreshLorebookEntryTargets().then(() => {
+                    renderCategorySelect();
+                    renderAdapterSelect();
+                });
+            }
+            scheduleEvaluation();
+        });
     }
 
     document.addEventListener('input', () => scheduleEvaluation(), true);
@@ -1673,6 +2063,7 @@ jQuery(async () => {
     $('#extensions_settings2').append(settingsHtml);
 
     getSettings();
+    await refreshLorebookEntryTargets();
     renderCategorySelect();
     renderAdapterSelect();
     bindSettingsHandlers();
