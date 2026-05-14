@@ -15,6 +15,7 @@ import {
     renderExtensionTemplateAsync,
 } from '../../../extensions.js';
 import { getChatCompletionModel, oai_settings, promptManager } from '../../../openai.js';
+import { INJECTION_POSITION } from '../../../PromptManager.js';
 import { power_user } from '../../../power-user.js';
 import { getPresetManager } from '../../../preset-manager.js';
 import { executeSlashCommandsWithOptions } from '../../../slash-commands.js';
@@ -76,9 +77,9 @@ const categories = [
     { id: 'regex', label: 'Regex', icon: 'fa-code' },
     { id: 'character', label: 'Character / Chat', icon: 'fa-address-card' },
     { id: 'api', label: 'API / Model', icon: 'fa-plug' },
-    { id: 'theme', label: 'Theme', icon: 'fa-palette' },
     { id: 'lorebook', label: 'Lorebook', icon: 'fa-book' },
     { id: 'quickReply', label: 'Quick Reply', icon: 'fa-reply' },
+    { id: 'userSettings', label: 'User Settings', icon: 'fa-user-gear' },
     { id: 'custom', label: 'Custom', icon: 'fa-wand-magic-sparkles' },
 ];
 
@@ -183,6 +184,14 @@ function setByPath(source, path, value) {
 }
 
 function valuesEqual(actual, expected) {
+    if (Array.isArray(actual) || Array.isArray(expected)) {
+        const actualArray = Array.isArray(actual) ? actual : String(actual ?? '').split(',').map(item => item.trim()).filter(Boolean);
+        const expectedArray = Array.isArray(expected) ? expected : String(expected ?? '').split(',').map(item => item.trim()).filter(Boolean);
+        return JSON.stringify(actualArray) === JSON.stringify(expectedArray);
+    }
+    if (actual && expected && typeof actual === 'object' && typeof expected === 'object') {
+        return Object.entries(expected).every(([key, value]) => valuesEqual(actual[key], value));
+    }
     if (typeof actual === 'boolean') {
         return actual === parseBoolean(expected);
     }
@@ -221,6 +230,25 @@ function getSelectOptions(selectorOrElement, fallback = []) {
         .filter(option => String(option.id ?? '').length > 0);
 
     return options.length ? options : fallback;
+}
+
+function renderOptionHtml(options, selectedValue = '') {
+    const renderOption = option => `<option value="${escapeHtml(option.id)}" ${String(option.id) === String(selectedValue) ? 'selected' : ''}>${escapeHtml(option.label)}</option>`;
+    const groups = new Map();
+    const ungrouped = [];
+
+    for (const option of options) {
+        if (option.group) {
+            groups.set(option.group, [...(groups.get(option.group) ?? []), option]);
+        } else {
+            ungrouped.push(option);
+        }
+    }
+
+    return [
+        ...ungrouped.map(renderOption),
+        ...Array.from(groups.entries()).map(([group, groupOptions]) => `<optgroup label="${escapeHtml(group)}">${groupOptions.map(renderOption).join('')}</optgroup>`),
+    ].join('');
 }
 
 function getThemeOptions() {
@@ -427,6 +455,226 @@ const presetParameterDefinitions = [
     },
 ];
 
+const userSettingDefinitions = [
+    { group: 'UI Theme', id: 'theme', label: 'UI Theme', type: 'select', selector: '#themes' },
+    { group: 'UI Theme', id: 'avatar_style', label: 'Avatars', type: 'select', selector: '#avatar_style' },
+    { group: 'UI Theme', id: 'chat_display', label: 'Chat Style', type: 'select', selector: '#chat_display' },
+    { group: 'UI Theme', id: 'media_display', label: 'Media Style', type: 'select', selector: '#media_display' },
+    { group: 'UI Theme', id: 'toastr_position', label: 'Notifications', type: 'select', selector: '#toastr_position' },
+    { group: 'Theme Colors', id: 'main_text_color', label: 'Main Text', type: 'text', selector: '#main-text-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'italics_text_color', label: 'Italic Text', type: 'text', selector: '#italics-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'underline_text_color', label: 'Underlined Text', type: 'text', selector: '#underline-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'quote_text_color', label: 'Quote Text', type: 'text', selector: '#quote-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'shadow_color', label: 'Text Shadow', type: 'text', selector: '#shadow-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'chat_tint_color', label: 'Chat Background', type: 'text', selector: '#chat-tint-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'blur_tint_color', label: 'UI Background', type: 'text', selector: '#blur-tint-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'border_color', label: 'UI Border', type: 'text', selector: '#border-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'user_mes_blur_tint_color', label: 'User Message', type: 'text', selector: '#user-mes-blur-tint-color-picker', attribute: 'color' },
+    { group: 'Theme Colors', id: 'bot_mes_blur_tint_color', label: 'AI Message', type: 'text', selector: '#bot-mes-blur-tint-color-picker', attribute: 'color' },
+    { group: 'Interface', id: 'chat_width', label: 'Chat Width', type: 'number', selector: '#chat_width_slider' },
+    { group: 'Interface', id: 'font_scale', label: 'Font Scale', type: 'number', selector: '#font_scale' },
+    { group: 'Interface', id: 'blur_strength', label: 'Blur Strength', type: 'number', selector: '#blur_strength' },
+    { group: 'Interface', id: 'shadow_width', label: 'Shadow Width', type: 'number', selector: '#shadow_width' },
+    { group: 'Interface', id: 'reduced_motion', label: 'Reduced Motion', type: 'boolean', selector: '#reduced_motion' },
+    { group: 'Interface', id: 'fast_ui_mode', label: 'No Blur Effect', type: 'boolean', selector: '#fast_ui_mode' },
+    { group: 'Interface', id: 'noShadows', label: 'No Text Shadows', type: 'boolean', selector: '#noShadowsmode' },
+    { group: 'Interface', id: 'waifuMode', label: 'Visual Novel Mode', type: 'boolean', selector: '#waifuMode' },
+    { group: 'Interface', id: 'expand_message_actions', label: 'Expand Message Actions', type: 'boolean', selector: '#expandMessageActions' },
+    { group: 'Interface', id: 'enableZenSliders', label: 'Zen Sliders', type: 'boolean', selector: '#enableZenSliders' },
+    { group: 'Interface', id: 'enableLabMode', label: 'Mad Lab Mode', type: 'boolean', selector: '#enableLabMode' },
+    { group: 'Interface', id: 'timer_enabled', label: 'Message Timer', type: 'boolean', selector: '#messageTimerEnabled' },
+    { group: 'Interface', id: 'timestamps_enabled', label: 'Chat Timestamps', type: 'boolean', selector: '#messageTimestampsEnabled' },
+    { group: 'Interface', id: 'timestamp_model_icon', label: 'Model Icons', type: 'boolean', selector: '#messageModelIconEnabled' },
+    { group: 'Interface', id: 'mesIDDisplay_enabled', label: 'Message IDs', type: 'boolean', selector: '#mesIDDisplayEnabled' },
+    { group: 'Interface', id: 'hideChatAvatars_enabled', label: 'Hide Chat Avatars', type: 'boolean', selector: '#hideChatAvatarsEnabled' },
+    { group: 'Interface', id: 'message_token_count_enabled', label: 'Message Token Count', type: 'boolean', selector: '#messageTokensEnabled' },
+    { group: 'Interface', id: 'compact_input_area', label: 'Compact Input Area', type: 'boolean', selector: '#compact_input_area' },
+    { group: 'Interface', id: 'show_swipe_num_all_messages', label: 'Swipe # for All Messages', type: 'boolean', selector: '#show_swipe_num_all_messages' },
+    { group: 'Interface', id: 'hotswap_enabled', label: 'Characters Hotswap', type: 'boolean', selector: '#hotswapEnabled' },
+    { group: 'Interface', id: 'zoomed_avatar_magnification', label: 'Avatar Hover Magnification', type: 'boolean', selector: '#zoomed_avatar_magnification' },
+    { group: 'Interface', id: 'bogus_folders', label: 'Tags as Folders', type: 'boolean', selector: '#bogus_folders' },
+    { group: 'Interface', id: 'click_to_edit', label: 'Click to Edit', type: 'boolean', selector: '#click_to_edit' },
+    { group: 'Character Handling', id: 'aux_field', label: 'Char List Subheader', type: 'select', selector: '#aux_field' },
+    { group: 'Character Handling', id: 'tag_import_setting', label: 'Import Card Tags', type: 'select', selector: '#tag_import_setting' },
+    { group: 'Character Handling', id: 'fuzzy_search', label: 'Advanced Character Search', type: 'boolean', selector: '#fuzzy_search_checkbox' },
+    { group: 'Character Handling', id: 'prefer_character_prompt', label: 'Prefer Char. Prompt', type: 'boolean', selector: '#prefer_character_prompt' },
+    { group: 'Character Handling', id: 'prefer_character_jailbreak', label: 'Prefer Char. Instructions', type: 'boolean', selector: '#prefer_character_jailbreak' },
+    { group: 'Character Handling', id: 'never_resize_avatars', label: 'Never resize avatars', type: 'boolean', selector: '#never_resize_avatars' },
+    { group: 'Character Handling', id: 'background_thumbnails_animation', label: 'Animated background thumbnails', type: 'boolean', selector: '#background_thumbnails_animation' },
+    { group: 'Character Handling', id: 'show_card_avatar_urls', label: 'Show avatar filenames', type: 'boolean', selector: '#show_card_avatar_urls' },
+    { group: 'Character Handling', id: 'spoiler_free_mode', label: 'Spoiler Free Mode', type: 'boolean', selector: '#spoiler_free_mode' },
+    { group: 'Miscellaneous', id: 'smooth_streaming', label: 'Smooth Streaming', type: 'boolean', selector: '#smooth_streaming' },
+    { group: 'Miscellaneous', id: 'smooth_streaming_no_think', label: 'Exclude Thinking from Smooth Streaming', type: 'boolean', selector: '#smooth_streaming_no_think' },
+    { group: 'Miscellaneous', id: 'smooth_streaming_speed', label: 'Smooth Streaming Speed', type: 'number', selector: '#smooth_streaming_speed' },
+    { group: 'Miscellaneous', id: 'stream_fade_in', label: 'Stream Fade-In', type: 'boolean', selector: '#stream_fade_in' },
+    { group: 'Miscellaneous', id: 'play_message_sound', label: 'Message Sound', type: 'boolean', selector: '#play_message_sound' },
+    { group: 'Miscellaneous', id: 'play_sound_unfocused', label: 'Background Sound Only', type: 'boolean', selector: '#play_sound_unfocused' },
+    { group: 'Miscellaneous', id: 'relaxed_api_urls', label: 'Relaxed API URLs', type: 'boolean', selector: '#relaxed_api_urls' },
+    { group: 'Miscellaneous', id: 'world_import_dialog', label: 'Lorebook Import Dialog', type: 'boolean', selector: '#world_import_dialog' },
+    { group: 'Miscellaneous', id: 'enable_auto_select_input', label: 'Auto-select Input Text', type: 'boolean', selector: '#enable_auto_select_input' },
+    { group: 'Miscellaneous', id: 'enable_md_hotkeys', label: 'Markdown Hotkeys', type: 'boolean', selector: '#enable_md_hotkeys' },
+    { group: 'Miscellaneous', id: 'restore_user_input', label: 'Restore User Input', type: 'boolean', selector: '#restore_user_input' },
+    { group: 'Miscellaneous', id: 'movingUI', label: 'MovingUI', type: 'boolean', selector: '#movingUImode' },
+    { group: 'Miscellaneous', id: 'movingUIPreset', label: 'MovingUI Preset', type: 'select', selector: '#movingUIPresets' },
+    { group: 'Miscellaneous', id: 'custom_css', label: 'Custom CSS', type: 'text', selector: '#customCSS' },
+    { group: 'Chat / Message Handling', id: 'chat_truncation', label: '# Msg. to Load', type: 'number', selector: '#chat_truncation' },
+    { group: 'Chat / Message Handling', id: 'streaming_fps', label: 'Streaming FPS', type: 'number', selector: '#streaming_fps' },
+    { group: 'Chat / Message Handling', id: 'example_messages_behavior', label: 'Example Messages Behavior', type: 'select', selector: '#example_messages_behavior' },
+    { group: 'Chat / Message Handling', id: 'image_overswipe', label: 'Image Swipe Behavior', type: 'select', selector: '#image_overswipe' },
+    { group: 'Chat / Message Handling', id: 'send_on_enter', label: 'Enter to Send', type: 'select', selector: '#send_on_enter' },
+    { group: 'Chat / Message Handling', id: 'continue_on_send', label: '"Send" to Continue', type: 'boolean', selector: '#continue_on_send' },
+    { group: 'Chat / Message Handling', id: 'quick_continue', label: 'Quick "Continue" button', type: 'boolean', selector: '#quick_continue' },
+    { group: 'Chat / Message Handling', id: 'quick_impersonate', label: 'Quick "Impersonate" button', type: 'boolean', selector: '#quick_impersonate' },
+    { group: 'Chat / Message Handling', id: 'swipes', label: 'Swipes', type: 'boolean', selector: '#swipes-checkbox' },
+    { group: 'Chat / Message Handling', id: 'gestures', label: 'Gestures', type: 'boolean', selector: '#gestures-checkbox' },
+    { group: 'Chat / Message Handling', id: 'auto_load_chat', label: 'Auto-load Last Chat', type: 'boolean', selector: '#auto-load-chat-checkbox' },
+    { group: 'Chat / Message Handling', id: 'auto_scroll_chat_to_bottom', label: 'Auto-scroll Chat', type: 'boolean', selector: '#auto_scroll_chat_to_bottom' },
+    { group: 'Chat / Message Handling', id: 'auto_save_msg_edits', label: 'Auto-save Message Edits', type: 'boolean', selector: '#auto_save_msg_edits' },
+    { group: 'Chat / Message Handling', id: 'confirm_message_delete', label: 'Confirm message deletion', type: 'boolean', selector: '#confirm_message_delete' },
+    { group: 'Chat / Message Handling', id: 'auto_fix_generated_markdown', label: 'Auto-fix Markdown', type: 'boolean', selector: '#auto_fix_generated_markdown' },
+    { group: 'Chat / Message Handling', id: 'forbid_external_media', label: 'Forbid External Media', type: 'boolean', selector: '#forbid_external_media' },
+    { group: 'Chat / Message Handling', id: 'allow_name2_display', label: 'Show {{char}}: in responses', type: 'boolean', selector: '#allow_name2_display' },
+    { group: 'Chat / Message Handling', id: 'allow_name1_display', label: 'Show {{user}}: in responses', type: 'boolean', selector: '#allow_name1_display' },
+    { group: 'Chat / Message Handling', id: 'encode_tags', label: 'Show <tags> in responses', type: 'boolean', selector: '#encode_tags' },
+    { group: 'Chat / Message Handling', id: 'experimental_macro_engine', label: 'Experimental Macro Engine', type: 'boolean', selector: '#experimental_macro_engine' },
+    { group: 'Chat / Message Handling', id: 'disable_group_trimming', label: 'Relax message trim in Groups', type: 'boolean', selector: '#disable_group_trimming' },
+    { group: 'Chat / Message Handling', id: 'console_log_prompts', label: 'Log prompts to console', type: 'boolean', selector: '#console_log_prompts' },
+    { group: 'Chat / Message Handling', id: 'request_token_probabilities', label: 'Request token probabilities', type: 'boolean', selector: '#request_token_probabilities' },
+    { group: 'Chat / Message Handling', id: 'show_group_chat_queue', label: 'Show group chat queue', type: 'boolean', selector: '#show_group_chat_queue' },
+    { group: 'Chat / Message Handling', id: 'pin_styles', label: 'Pin greeting message styles', type: 'boolean', selector: '#pin_styles' },
+    { group: 'Auto-swipe', id: 'auto_swipe', label: 'Auto-swipe', type: 'boolean', selector: '#auto_swipe' },
+    { group: 'Auto-swipe', id: 'auto_swipe_minimum_length', label: 'Minimum generated length', type: 'number', selector: '#auto_swipe_minimum_length' },
+    { group: 'Auto-swipe', id: 'auto_swipe_blacklist', label: 'Blacklist words', type: 'text', selector: '#auto_swipe_blacklist' },
+    { group: 'Auto-swipe', id: 'auto_swipe_blacklist_threshold', label: 'Blacklist threshold', type: 'number', selector: '#auto_swipe_blacklist_threshold' },
+    { group: 'Auto-Continue', id: 'auto_continue.enabled', label: 'Auto-Continue', type: 'boolean', selector: '#auto_continue_enabled' },
+    { group: 'Auto-Continue', id: 'auto_continue.allow_chat_completions', label: 'Allow Chat Completion', type: 'boolean', selector: '#auto_continue_allow_chat_completions' },
+    { group: 'Auto-Continue', id: 'auto_continue.target_length', label: 'Target length', type: 'number', selector: '#auto_continue_target_length' },
+    { group: 'Advanced Formatting', id: 'single_line', label: 'Single line mode', type: 'boolean', selector: '#single_line' },
+    { group: 'Advanced Formatting', id: 'trim_spaces', label: 'Trim spaces', type: 'boolean', selector: '#trim_spaces' },
+    { group: 'Advanced Formatting', id: 'collapse_newlines', label: 'Collapse newlines', type: 'boolean', selector: '#collapse-newlines-checkbox' },
+    { group: 'Advanced Formatting', id: 'always_force_name2', label: 'Always force character name', type: 'boolean', selector: '#always-force-name2-checkbox' },
+    { group: 'Advanced Formatting', id: 'trim_sentences', label: 'Trim incomplete sentences', type: 'boolean', selector: '#trim_sentences_checkbox' },
+    { group: 'Advanced Formatting', id: 'markdown_escape_strings', label: 'Markdown escape strings', type: 'text', selector: '#markdown_escape_strings' },
+    { group: 'Advanced Formatting', id: 'start_reply_with', label: 'Start reply with', type: 'text', selector: '#start_reply_with' },
+    { group: 'Advanced Formatting', id: 'custom_stopping_strings_macro', label: 'Stopping strings macros', type: 'boolean', selector: '#custom_stopping_strings_macro' },
+    { group: 'Tokenization', id: 'tokenizer', label: 'Tokenizer', type: 'select', selector: '#tokenizer' },
+    { group: 'Tokenization', id: 'token_padding', label: 'Token padding', type: 'number', selector: '#token_padding' },
+    { group: 'Personas / Tags', id: 'persona_show_notifications', label: 'Persona notifications', type: 'boolean', selector: '#persona_show_notifications' },
+    { group: 'Personas / Tags', id: 'persona_allow_multi_connections', label: 'Persona multi-connections', type: 'boolean', selector: '#persona_allow_multi_connections' },
+    { group: 'Personas / Tags', id: 'persona_auto_lock', label: 'Persona auto-lock', type: 'boolean', selector: '#persona_auto_lock' },
+    { group: 'Personas / Tags', id: 'show_tag_filters', label: 'Show tag filters', type: 'boolean' },
+    { group: 'STscript', id: 'stscript.autocomplete.state', label: 'Autocomplete', type: 'select', selector: '#stscript_autocomplete_state' },
+    { group: 'STscript', id: 'stscript.autocomplete.autoHide', label: 'Automatically hide details', type: 'boolean', selector: '#stscript_autocomplete_autoHide' },
+    { group: 'STscript', id: 'stscript.autocomplete.showInAllMacroFields', label: 'Show in all macro fields', type: 'boolean', selector: '#stscript_autocomplete_showInAllMacroFields' },
+    { group: 'STscript', id: 'stscript.matching', label: 'Matching', type: 'select', selector: '#stscript_matching' },
+    { group: 'STscript', id: 'stscript.autocomplete.style', label: 'Autocomplete style', type: 'select', selector: '#stscript_autocomplete_style' },
+    { group: 'STscript', id: 'stscript.autocomplete.select', label: 'Autocomplete keyboard', type: 'select', selector: '#stscript_autocomplete_select' },
+    { group: 'STscript', id: 'stscript.autocomplete.font.scale', label: 'Autocomplete font scale', type: 'number', selector: '#stscript_autocomplete_font_scale' },
+    { group: 'STscript', id: 'stscript.autocomplete.width.left', label: 'Autocomplete width left', type: 'number', selector: '#stscript_autocomplete_width_left' },
+    { group: 'STscript', id: 'stscript.autocomplete.width.right', label: 'Autocomplete width right', type: 'number', selector: '#stscript_autocomplete_width_right' },
+    { group: 'STscript', id: 'stscript.parser.flags.STRICT_ESCAPING', label: 'Strict escaping', type: 'boolean', selector: '#stscript_parser_flag_strict_escaping' },
+    { group: 'STscript', id: 'stscript.parser.flags.REPLACE_GETVAR', label: 'Replace getvar', type: 'boolean', selector: '#stscript_parser_flag_replace_getvar' },
+];
+
+function getUserSettingDefinition(target) {
+    const id = typeof target === 'object' ? target?.id : target;
+    return userSettingDefinitions.find(setting => setting.id === id) ?? null;
+}
+
+function getUserSettingTargets() {
+    return userSettingDefinitions.map(setting => makeTarget(setting.id, setting.label, {
+        group: setting.group,
+        type: setting.type,
+    }));
+}
+
+function getUserSettingValue(target) {
+    const setting = getUserSettingDefinition(target);
+    if (!setting) {
+        return undefined;
+    }
+
+    const selector = setting.selector;
+    const element = selector ? document.querySelector(selector) : null;
+    if (element && setting.attribute) {
+        return element.getAttribute(setting.attribute) ?? getByPath(power_user, setting.id);
+    }
+    if (selector && element) {
+        return getDomValue(selector);
+    }
+
+    return getByPath(power_user, setting.id);
+}
+
+function getUserSettingValues(target) {
+    const setting = getUserSettingDefinition(target);
+    if (!setting) {
+        return [];
+    }
+
+    if (setting.writeSelector) {
+        return Array.from(document.querySelectorAll(setting.writeSelector))
+            .filter(element => element instanceof HTMLInputElement)
+            .map(element => makeTarget(element.value, element.closest('label')?.textContent?.trim() || element.value));
+    }
+
+    const element = setting.selector ? document.querySelector(setting.selector) : null;
+    if (element instanceof HTMLSelectElement) {
+        return getSelectOptions(element);
+    }
+
+    return [];
+}
+
+function setUserSettingValue(target, value) {
+    const setting = getUserSettingDefinition(target);
+    if (!setting) {
+        warn(`User setting not found: ${target?.id ?? target}`);
+        return false;
+    }
+
+    if (setting.writeSelector && setting.type === 'select') {
+        const option = Array.from(document.querySelectorAll(setting.writeSelector))
+            .find(element => element instanceof HTMLInputElement && String(element.value) === String(value));
+        if (option instanceof HTMLInputElement) {
+            option.checked = true;
+            option.dispatchEvent(new Event('input', { bubbles: true }));
+            option.dispatchEvent(new Event('change', { bubbles: true }));
+            return false;
+        }
+    }
+
+    const element = setting.selector ? document.querySelector(setting.selector) : null;
+    if (element && setting.attribute) {
+        const nextValue = String(value ?? '');
+        if (element.getAttribute(setting.attribute) === nextValue) {
+            return false;
+        }
+        element.setAttribute(setting.attribute, nextValue);
+        element.dispatchEvent(new CustomEvent('change', {
+            bubbles: true,
+            detail: { rgba: nextValue },
+        }));
+        return false;
+    }
+
+    if (setting.selector && element) {
+        return setDomValue(setting.selector, value);
+    }
+
+    const typedValue = setting.type === 'boolean'
+        ? parseBoolean(value)
+        : setting.type === 'number'
+            ? Number(value)
+            : value;
+    const changed = setByPath(power_user, setting.id, typedValue);
+    if (changed) {
+        saveSettings();
+        eventSource.emit(event_types.SETTINGS_UPDATED);
+    }
+    return false;
+}
+
 function getCurrentApiId() {
     return String(getContext().mainApi || '');
 }
@@ -524,19 +772,174 @@ async function saveRegexScript(script) {
 }
 
 function getPromptOrderEntry(target) {
-    if (!promptManager || !target?.identifier) {
+    const identifier = typeof target === 'object' ? target?.identifier : target;
+    if (!promptManager || !identifier) {
         return null;
     }
     try {
-        return promptManager.getPromptOrderEntry(promptManager.activeCharacter, target.identifier);
+        return promptManager.getPromptOrderEntry(promptManager.activeCharacter, identifier);
     } catch {
         return null;
     }
 }
 
+function getPrompt(target) {
+    const identifier = typeof target === 'object' ? target?.identifier : target;
+    return promptManager?.getPromptById?.(identifier) ?? null;
+}
+
 function getPromptName(identifier) {
     const prompt = promptManager?.getPromptById?.(identifier);
     return prompt?.name || identifier;
+}
+
+function getPromptTargets() {
+    if (!promptManager?.activeCharacter) {
+        return [];
+    }
+    const order = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter) ?? [];
+    return order.map(entry => makeTarget(entry.identifier, getPromptName(entry.identifier), {
+        identifier: entry.identifier,
+    }));
+}
+
+const promptSettingDefinitions = [
+    {
+        id: 'enabled',
+        label: 'Enabled',
+        type: 'boolean',
+        coerce: value => parseBoolean(value),
+        display: value => stringifyValue(value),
+    },
+    {
+        id: 'role',
+        label: 'Role',
+        type: 'select',
+        values: [
+            makeTarget('system', 'System'),
+            makeTarget('user', 'User'),
+            makeTarget('assistant', 'AI Assistant'),
+        ],
+    },
+    {
+        id: 'injection_position',
+        label: 'Position',
+        type: 'select',
+        values: [
+            makeTarget(String(INJECTION_POSITION.RELATIVE), 'Relative'),
+            makeTarget(String(INJECTION_POSITION.ABSOLUTE), 'In-chat'),
+        ],
+        coerce: value => Number(value),
+        display: value => Number(value) === INJECTION_POSITION.ABSOLUTE ? 'In-chat' : 'Relative',
+    },
+    { id: 'injection_depth', label: 'Depth', type: 'number', coerce: value => Number(value) },
+    { id: 'injection_order', label: 'Order', type: 'number', coerce: value => Number(value) },
+    {
+        id: 'injection_trigger',
+        label: 'Triggers',
+        type: 'text',
+        coerce: value => String(value || '').split(',').map(item => item.trim()).filter(Boolean),
+        display: value => Array.isArray(value) ? value.join(', ') : String(value ?? ''),
+    },
+    { id: 'forbid_overrides', label: 'Forbid overrides', type: 'boolean', coerce: value => parseBoolean(value) },
+];
+
+function getPromptSettingDefinition(field) {
+    return promptSettingDefinitions.find(setting => setting.id === field) ?? null;
+}
+
+function getPromptSettingTargets() {
+    return getPromptTargets().flatMap(prompt => promptSettingDefinitions.map(setting => makeTarget(
+        `${prompt.identifier}.${setting.id}`,
+        `${prompt.label}: ${setting.label}`,
+        {
+            identifier: prompt.identifier,
+            field: setting.id,
+            group: prompt.label,
+        },
+    )));
+}
+
+function parsePromptSettingTarget(target) {
+    if (typeof target === 'object') {
+        return {
+            identifier: target.identifier || String(target.id || '').split('.')[0],
+            field: target.field || String(target.id || '').split('.').slice(1).join('.'),
+        };
+    }
+
+    const [identifier, ...fieldParts] = String(target || '').split('.');
+    return { identifier, field: fieldParts.join('.') };
+}
+
+function savePromptManagerSettings() {
+    promptManager?.render?.();
+    promptManager?.saveServiceSettings?.();
+}
+
+function readPromptField(target, field) {
+    const prompt = getPrompt(target);
+    if (field === 'enabled') {
+        return !!getPromptOrderEntry(target)?.enabled;
+    }
+    const value = prompt?.[field];
+    return field === 'injection_trigger'
+        ? (Array.isArray(value) ? value.join(', ') : String(value ?? ''))
+        : value;
+}
+
+function getPromptState(target) {
+    return Object.fromEntries(promptSettingDefinitions.map(setting => [setting.id, readPromptField(target, setting.id)]));
+}
+
+function writePromptFields(target, fields) {
+    const identifier = typeof target === 'object' ? target?.identifier : target;
+    const prompt = getPrompt(target);
+    const entry = getPromptOrderEntry(target);
+    if (!prompt || !entry) {
+        warn(`Prompt not found: ${target?.identifier || target?.id || target}`);
+        return false;
+    }
+
+    let changed = false;
+    for (const [field, value] of Object.entries(fields ?? {})) {
+        const setting = getPromptSettingDefinition(field);
+        if (!setting) {
+            continue;
+        }
+        const nextValue = setting.coerce ? setting.coerce(value) : value;
+        if (field === 'enabled') {
+            if (!!entry.enabled !== !!nextValue) {
+                entry.enabled = !!nextValue;
+                changed = true;
+            }
+            continue;
+        }
+        const currentValue = prompt[field];
+        if (JSON.stringify(currentValue ?? null) !== JSON.stringify(nextValue ?? null)) {
+            prompt[field] = nextValue;
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        promptManager.updatePromptByIdentifier?.(identifier, prompt);
+        savePromptManagerSettings();
+    }
+
+    return false;
+}
+
+function describePromptFields(value) {
+    const description = Object.entries(value ?? {})
+        .map(([field, fieldValue]) => {
+            const setting = getPromptSettingDefinition(field);
+            const label = setting?.label || field;
+            const displayValue = setting?.display ? setting.display(fieldValue) : stringifyValue(fieldValue);
+            return `${label} = ${displayValue}`;
+        })
+        .join(', ');
+    return description || 'No changes';
 }
 
 function getDomValue(selector) {
@@ -629,6 +1032,12 @@ function describeBlock(block, mode = 'condition') {
 function stringifyValue(value) {
     if (typeof value === 'boolean') {
         return value ? 'enabled' : 'disabled';
+    }
+    if (Array.isArray(value)) {
+        return value.join(', ');
+    }
+    if (value && typeof value === 'object') {
+        return Object.entries(value).map(([key, entryValue]) => `${key}: ${stringifyValue(entryValue)}`).join(', ');
     }
     return String(value ?? '');
 }
@@ -881,22 +1290,32 @@ registerAdapter({
 });
 
 registerAdapter({
+    id: 'preset.prompt',
+    category: 'preset',
+    label: 'Preset prompt',
+    icon: 'fa-toggle-on',
+    writable: true,
+    valueType: 'custom',
+    snapshotBeforeApply: true,
+    targetCaption: 'Prompt',
+    listTargets: () => getPromptTargets(),
+    read: block => getPromptState(block.target),
+    write: block => writePromptFields(block.target, block.value),
+    renderValuePicker: renderPromptValuePicker,
+    getBuilderValue: getPromptBuilderValue,
+    describe: block => `Prompt "${getBlockTargetLabel(block)}": ${describePromptFields(block.value)}`,
+});
+
+registerAdapter({
     id: 'preset.promptToggle',
     category: 'preset',
     label: 'Preset prompt toggle',
     icon: 'fa-toggle-on',
+    hidden: true,
     writable: true,
     reversible: true,
     valueType: 'boolean',
-    listTargets: () => {
-        if (!promptManager?.activeCharacter) {
-            return [];
-        }
-        const order = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter) ?? [];
-        return order.map(entry => makeTarget(entry.identifier, getPromptName(entry.identifier), {
-            identifier: entry.identifier,
-        }));
-    },
+    listTargets: () => getPromptTargets(),
     read: block => !!getPromptOrderEntry(block.target)?.enabled,
     write: block => {
         const entry = getPromptOrderEntry(block.target);
@@ -915,6 +1334,52 @@ registerAdapter({
     },
     invert: block => ({ ...block, value: !parseBoolean(block.value) }),
     describe: block => `Prompt "${getBlockTargetLabel(block)}" = ${stringifyValue(block.value)}`,
+});
+
+registerAdapter({
+    id: 'preset.promptSetting',
+    category: 'preset',
+    label: 'Preset prompt setting',
+    icon: 'fa-gear',
+    hidden: true,
+    writable: true,
+    valueType: 'text',
+    snapshotBeforeApply: true,
+    targetCaption: 'Prompt setting',
+    getValueType: target => getPromptSettingDefinition(parsePromptSettingTarget(target).field)?.type || 'text',
+    listTargets: () => getPromptSettingTargets(),
+    listValues: target => getPromptSettingDefinition(parsePromptSettingTarget(target).field)?.values ?? [],
+    read: block => {
+        const { identifier, field } = parsePromptSettingTarget(block.target);
+        const prompt = getPrompt(identifier);
+        const setting = getPromptSettingDefinition(field);
+        const value = prompt?.[field];
+        return field === 'injection_trigger' && setting?.display ? setting.display(value) : value;
+    },
+    write: block => {
+        const { identifier, field } = parsePromptSettingTarget(block.target);
+        const prompt = getPrompt(identifier);
+        const setting = getPromptSettingDefinition(field);
+        if (!prompt || !setting) {
+            warn(`Prompt setting not found: ${getBlockTargetLabel(block)}`);
+            return false;
+        }
+        const nextValue = setting.coerce ? setting.coerce(block.value) : block.value;
+        const currentValue = prompt[field];
+        if (JSON.stringify(currentValue ?? null) === JSON.stringify(nextValue ?? null)) {
+            return false;
+        }
+        prompt[field] = nextValue;
+        promptManager.updatePromptByIdentifier?.(identifier, prompt);
+        savePromptManagerSettings();
+        return false;
+    },
+    describe: block => {
+        const { field } = parsePromptSettingTarget(block.target);
+        const setting = getPromptSettingDefinition(field);
+        const value = setting?.display ? setting.display(block.value) : stringifyValue(block.value);
+        return `Prompt setting "${getBlockTargetLabel(block)}" = ${value}`;
+    },
 });
 
 registerAdapter({
@@ -1171,6 +1636,23 @@ registerAdapter({
     },
     invert: block => ({ ...block, value: !parseBoolean(block.value) }),
     describe: block => `Quick Reply chat "${getBlockTargetLabel(block)}" = ${stringifyValue(block.value)}`,
+});
+
+registerAdapter({
+    id: 'userSettings.powerUser',
+    category: 'userSettings',
+    label: 'Tavern setting',
+    icon: 'fa-user-gear',
+    writable: true,
+    valueType: 'text',
+    snapshotBeforeApply: true,
+    targetCaption: 'Setting',
+    getValueType: target => getUserSettingDefinition(target)?.type || 'text',
+    listTargets: () => getUserSettingTargets(),
+    listValues: target => getUserSettingValues(target),
+    read: block => getUserSettingValue(block.target),
+    write: block => setUserSettingValue(block.target, block.value),
+    describe: block => `User setting "${getBlockTargetLabel(block)}" = ${stringifyValue(block.value)}`,
 });
 
 registerAdapter({
@@ -1579,6 +2061,9 @@ function renderAdapterSelect(preferredAdapter = '') {
 }
 
 function isAdapterAvailable(adapter, forResults) {
+    if (adapter.hidden) {
+        return false;
+    }
     if (forResults && !adapter.writable) {
         return false;
     }
@@ -1646,7 +2131,7 @@ function renderTargetAndValuePickers() {
             const defaultTarget = draft?.adapter === adapter.id
                 ? builderTargetId(draft.target)
                 : String(adapter.getDefaultTarget?.() ?? '');
-            targetWrap.removeClass('displayNone').html(`<span><i class="fa-solid fa-crosshairs"></i> ${targetCaption}</span><select id="silly_linkify_block_target" class="text_pole">${targets.map(target => `<option value="${escapeHtml(target.id)}" ${String(target.id) === defaultTarget ? 'selected' : ''}>${escapeHtml(target.label)}</option>`).join('')}</select>`);
+            targetWrap.removeClass('displayNone').html(`<span><i class="fa-solid fa-crosshairs"></i> ${targetCaption}</span><select id="silly_linkify_block_target" class="text_pole">${renderOptionHtml(targets, defaultTarget)}</select>`);
             const select = document.getElementById('silly_linkify_block_target');
             for (const option of select.options) {
                 const target = targets.find(candidate => String(candidate.id) === option.value);
@@ -1666,6 +2151,11 @@ function renderValuePicker() {
     const valueWrap = $('#silly_linkify_block_value_wrap');
     if (!adapter) {
         valueWrap.empty();
+        return;
+    }
+
+    if (typeof adapter.renderValuePicker === 'function') {
+        adapter.renderValuePicker(valueWrap, getBuilderTarget(adapter), draft);
         return;
     }
 
@@ -1695,7 +2185,7 @@ function renderValuePicker() {
         valueWrap.html(`
             <span><i class="fa-solid fa-circle-dot"></i> Value</span>
             <select id="silly_linkify_block_value" class="text_pole">
-                ${values.map(value => `<option value="${escapeHtml(value.id)}" ${String(value.id) === currentValue ? 'selected' : ''}>${escapeHtml(value.label)}</option>`).join('')}
+                ${renderOptionHtml(values, currentValue)}
             </select>
         `);
         return;
@@ -1738,6 +2228,50 @@ function renderCharacterValuePicker(valueWrap, values, preferredValue = '', sear
     `);
 }
 
+function renderPromptValuePicker(valueWrap, target, draft) {
+    const promptState = getPromptState(target);
+    const draftApplies = draft?.adapter === 'preset.prompt' && builderTargetId(draft.target) === builderTargetId(target);
+    const draftValue = draftApplies && draft.value && typeof draft.value === 'object' ? draft.value : {};
+
+    const fieldControl = setting => {
+        const isSelected = Object.hasOwn(draftValue, setting.id);
+        const value = isSelected ? draftValue[setting.id] : promptState[setting.id];
+        const common = `data-prompt-field="${escapeHtml(setting.id)}"`;
+        if (setting.type === 'boolean') {
+            return `
+                <select class="text_pole silly-linkify-prompt-field-value" ${common}>
+                    <option value="true" ${parseBoolean(value) ? 'selected' : ''}>enabled</option>
+                    <option value="false" ${!parseBoolean(value) ? 'selected' : ''}>disabled</option>
+                </select>
+            `;
+        }
+        if (setting.type === 'select') {
+            return `
+                <select class="text_pole silly-linkify-prompt-field-value" ${common}>
+                    ${renderOptionHtml(setting.values ?? [], value)}
+                </select>
+            `;
+        }
+        if (setting.type === 'number') {
+            return `<input class="text_pole silly-linkify-prompt-field-value" ${common} type="number" step="any" value="${escapeHtml(value ?? '')}">`;
+        }
+        return `<input class="text_pole silly-linkify-prompt-field-value" ${common} type="text" value="${escapeHtml(value ?? '')}" placeholder="normal, regenerate">`;
+    };
+
+    valueWrap.html(`
+        <span><i class="fa-solid fa-sliders"></i> Prompt settings</span>
+        <div id="silly_linkify_block_value" class="silly-linkify-prompt-settings">
+            ${promptSettingDefinitions.map(setting => `
+                <label class="silly-linkify-prompt-setting-row">
+                    <input class="silly-linkify-prompt-field-enabled" data-prompt-field="${escapeHtml(setting.id)}" type="checkbox" ${Object.hasOwn(draftValue, setting.id) ? 'checked' : ''}>
+                    <span>${escapeHtml(setting.label)}</span>
+                    ${fieldControl(setting)}
+                </label>
+            `).join('')}
+        </div>
+    `);
+}
+
 function getBuilderTarget(adapter) {
     const targetElement = document.getElementById('silly_linkify_block_target');
     if (!targetElement) {
@@ -1769,6 +2303,9 @@ function readCurrentBuilderTarget(adapter) {
 }
 
 function getBuilderValue(adapter) {
+    if (typeof adapter.getBuilderValue === 'function') {
+        return adapter.getBuilderValue();
+    }
     const value = $('#silly_linkify_block_value').val();
     const valueType = getAdapterValueType(adapter);
     if (valueType === 'boolean') {
@@ -1778,6 +2315,25 @@ function getBuilderValue(adapter) {
         const numericValue = Number(value);
         return Number.isFinite(numericValue) ? numericValue : value;
     }
+    return value;
+}
+
+function getPromptBuilderValue() {
+    const value = {};
+    $('#silly_linkify_block_value .silly-linkify-prompt-field-enabled:checked').each((_, checkbox) => {
+        const field = String(checkbox.dataset.promptField || '');
+        const setting = getPromptSettingDefinition(field);
+        const control = $(`#silly_linkify_block_value .silly-linkify-prompt-field-value[data-prompt-field="${CSS.escape(field)}"]`);
+        if (!setting || !control.length) {
+            return;
+        }
+        const rawValue = control.val();
+        value[field] = setting.type === 'boolean'
+            ? parseBoolean(rawValue)
+            : setting.type === 'number'
+                ? Number(rawValue)
+                : rawValue;
+    });
     return value;
 }
 
@@ -1798,6 +2354,10 @@ function addBuilderBlock() {
 
     if (!block.target && !adapter.eventOnly) {
         warn('Choose a target first.');
+        return;
+    }
+    if (adapter.valueType === 'custom' && (!block.value || !Object.keys(block.value).length)) {
+        warn('Choose at least one prompt setting.');
         return;
     }
 
@@ -2020,6 +2580,12 @@ function bindSettingsHandlers() {
         captureBuilderDraft();
     });
     $('#silly_linkify_block_value_wrap').on('change input', '#silly_linkify_block_value', captureBuilderDraft);
+    $('#silly_linkify_block_value_wrap').on('change input', '.silly-linkify-prompt-field-value', function () {
+        const field = String(this.dataset.promptField || '');
+        $(`#silly_linkify_block_value .silly-linkify-prompt-field-enabled[data-prompt-field="${CSS.escape(field)}"]`).prop('checked', true);
+        captureBuilderDraft();
+    });
+    $('#silly_linkify_block_value_wrap').on('change input', '.silly-linkify-prompt-field-enabled', captureBuilderDraft);
     $('#silly_linkify_add_block').on('click', addBuilderBlock);
     $('#silly_linkify_apply_json').on('click', applyRecipeJson);
 }

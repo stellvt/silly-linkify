@@ -277,6 +277,24 @@
     overflow: auto;
 }
 
+.silly-linkify-prompt-settings {
+    display: grid;
+    gap: 6px;
+}
+
+.silly-linkify-prompt-setting-row {
+    display: grid;
+    grid-template-columns: auto minmax(92px, 0.8fr) minmax(120px, 1.2fr);
+    align-items: center;
+    gap: 8px;
+}
+
+.silly-linkify-prompt-setting-row > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .silly-linkify-character-search {
     margin-bottom: 2px;
 }
@@ -382,6 +400,11 @@
     .silly-linkify-character-picker {
         max-height: 220px;
         grid-template-columns: 1fr;
+    }
+
+    .silly-linkify-prompt-setting-row {
+        grid-template-columns: auto minmax(78px, 0.75fr) minmax(105px, 1.25fr);
+        gap: 6px;
     }
 
     .silly-linkify-add-block {
