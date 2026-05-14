@@ -77,6 +77,9 @@
 .silly-linkify-modal {
     position: fixed;
     inset: 0;
+    width: auto !important;
+    max-width: none !important;
+    overflow: visible !important;
     z-index: 30000;
 }
 
@@ -91,7 +94,9 @@
     top: 5vh;
     left: 50%;
     display: flex;
-    width: min(1080px, calc(100vw - 28px));
+    box-sizing: border-box !important;
+    width: min(1080px, calc(100vw - 28px)) !important;
+    max-width: none !important;
     max-height: 90vh;
     flex-direction: column;
     overflow: auto;

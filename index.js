@@ -1984,6 +1984,27 @@ function renderRecipeList() {
         .join('');
 }
 
+function protectModalLayout() {
+    const modal = document.getElementById('silly_linkify_modal');
+    const panel = document.getElementById('silly_linkify_editor');
+    if (!modal || !panel) {
+        return;
+    }
+
+    if (modal.parentElement !== document.body) {
+        document.body.appendChild(modal);
+    }
+
+    modal.style.setProperty('position', 'fixed', 'important');
+    modal.style.setProperty('inset', '0', 'important');
+    modal.style.setProperty('width', 'auto', 'important');
+    modal.style.setProperty('max-width', 'none', 'important');
+    modal.style.setProperty('overflow', 'visible', 'important');
+    panel.style.setProperty('box-sizing', 'border-box', 'important');
+    panel.style.setProperty('width', 'min(1080px, calc(100vw - 28px))', 'important');
+    panel.style.setProperty('max-width', 'none', 'important');
+}
+
 function renderEditor() {
     const recipe = getSelectedRecipe();
     const modal = document.getElementById('silly_linkify_modal');
@@ -2006,6 +2027,7 @@ function renderEditor() {
 
 function openRecipeEditor(recipeId) {
     runtime.selectedRecipeId = recipeId;
+    protectModalLayout();
     $('#silly_linkify_modal').removeClass('displayNone');
     renderSettings();
 }
@@ -2627,6 +2649,7 @@ function subscribeToEvents() {
 jQuery(async () => {
     const settingsHtml = await renderExtensionTemplateAsync(EXTENSION_PATH, 'settings');
     $('#extensions_settings2').append(settingsHtml);
+    protectModalLayout();
 
     getSettings();
     await refreshLorebookEntryTargets();
