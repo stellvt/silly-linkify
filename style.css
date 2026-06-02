@@ -287,6 +287,23 @@
     gap: 6px;
 }
 
+.silly-linkify-message-match {
+    display: grid;
+    gap: 8px;
+}
+
+.silly-linkify-prompt-match-row {
+    display: grid;
+    grid-template-columns: minmax(92px, 0.8fr) minmax(120px, 1.2fr);
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+}
+
+.silly-linkify-message-case {
+    margin: 0;
+}
+
 .silly-linkify-prompt-setting-row {
     display: grid;
     grid-template-columns: auto minmax(92px, 0.8fr) minmax(120px, 1.2fr);
@@ -409,6 +426,11 @@
 
     .silly-linkify-prompt-setting-row {
         grid-template-columns: auto minmax(78px, 0.75fr) minmax(105px, 1.25fr);
+        gap: 6px;
+    }
+
+    .silly-linkify-prompt-match-row {
+        grid-template-columns: minmax(78px, 0.75fr) minmax(105px, 1.25fr);
         gap: 6px;
     }
 

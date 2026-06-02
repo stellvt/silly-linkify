@@ -1,4 +1,5 @@
 import {
+    chat,
     characters,
     chat_metadata,
     eventSource,
@@ -771,8 +772,41 @@ async function saveRegexScript(script) {
     return true;
 }
 
+function findPromptIdentifierByName(name) {
+    if (!promptManager?.activeCharacter || !name) {
+        return '';
+    }
+    const order = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter) ?? [];
+    const prompts = order.map(entry => ({
+        identifier: entry.identifier,
+        name: getPromptName(entry.identifier),
+    }));
+    return prompts.find(prompt => prompt.name === name)?.identifier
+        || prompts.find(prompt => prompt.name.toLowerCase() === String(name).toLowerCase())?.identifier
+        || '';
+}
+
+function resolvePromptIdentifier(target) {
+    if (typeof target === 'object') {
+        const identifier = target?.identifier || String(target?.id || '');
+        const name = target?.name || target?.label || '';
+        if (target?.matchBy === 'name' && name) {
+            return findPromptIdentifierByName(name) || identifier;
+        }
+        if (identifier && getPromptByIdentifier(identifier)) {
+            return identifier;
+        }
+        return name ? findPromptIdentifierByName(name) || identifier : identifier;
+    }
+    return target;
+}
+
+function getPromptByIdentifier(identifier) {
+    return promptManager?.getPromptById?.(identifier) ?? null;
+}
+
 function getPromptOrderEntry(target) {
-    const identifier = typeof target === 'object' ? target?.identifier : target;
+    const identifier = resolvePromptIdentifier(target);
     if (!promptManager || !identifier) {
         return null;
     }
@@ -784,12 +818,11 @@ function getPromptOrderEntry(target) {
 }
 
 function getPrompt(target) {
-    const identifier = typeof target === 'object' ? target?.identifier : target;
-    return promptManager?.getPromptById?.(identifier) ?? null;
+    return getPromptByIdentifier(resolvePromptIdentifier(target));
 }
 
 function getPromptName(identifier) {
-    const prompt = promptManager?.getPromptById?.(identifier);
+    const prompt = getPromptByIdentifier(identifier);
     return prompt?.name || identifier;
 }
 
@@ -800,6 +833,8 @@ function getPromptTargets() {
     const order = promptManager.getPromptOrderForCharacter(promptManager.activeCharacter) ?? [];
     return order.map(entry => makeTarget(entry.identifier, getPromptName(entry.identifier), {
         identifier: entry.identifier,
+        name: getPromptName(entry.identifier),
+        matchBy: 'identifier',
     }));
 }
 
@@ -893,7 +928,7 @@ function getPromptState(target) {
 }
 
 function writePromptFields(target, fields) {
-    const identifier = typeof target === 'object' ? target?.identifier : target;
+    const identifier = resolvePromptIdentifier(target);
     const prompt = getPrompt(target);
     const entry = getPromptOrderEntry(target);
     if (!prompt || !entry) {
@@ -940,6 +975,110 @@ function describePromptFields(value) {
         })
         .join(', ');
     return description || 'No changes';
+}
+
+const messageMatchRoleOptions = [
+    makeTarget('any', 'Any message'),
+    makeTarget('user', 'User messages'),
+    makeTarget('character', 'Character messages'),
+    makeTarget('system', 'System messages'),
+];
+
+const messageMatchScopeOptions = [
+    makeTarget('last', 'Last message'),
+    makeTarget('recent', 'Last messages'),
+    makeTarget('all', 'Whole chat'),
+];
+
+function normalizeMessageMatchValue(value) {
+    const source = value && typeof value === 'object' ? value : { pattern: value };
+    const depth = Number(source.depth ?? 1);
+    const scope = messageMatchScopeOptions.some(option => option.id === source.scope)
+        ? source.scope
+        : depth === 0
+            ? 'all'
+            : depth > 1
+                ? 'recent'
+                : 'last';
+    const normalizedDepth = Number.isFinite(depth) && depth > 0 ? Math.floor(depth) : 1;
+    return {
+        mode: source.mode === 'regex' ? 'regex' : 'text',
+        pattern: String(source.pattern ?? ''),
+        scope,
+        depth: scope === 'recent' ? Math.max(2, normalizedDepth) : normalizedDepth,
+        role: messageMatchRoleOptions.some(option => option.id === source.role) ? source.role : 'any',
+        caseSensitive: parseBoolean(source.caseSensitive),
+    };
+}
+
+function messageMatchesRole(message, role) {
+    if (role === 'user') {
+        return !!message?.is_user;
+    }
+    if (role === 'character') {
+        return !message?.is_user && !message?.is_system;
+    }
+    if (role === 'system') {
+        return !!message?.is_system;
+    }
+    return true;
+}
+
+function parseRegexPattern(pattern, caseSensitive) {
+    const source = String(pattern ?? '');
+    const lastSlash = source.lastIndexOf('/');
+    if (source.startsWith('/') && lastSlash > 0) {
+        const body = source.slice(1, lastSlash);
+        const flags = source.slice(lastSlash + 1);
+        const normalizedFlags = Array.from(new Set((caseSensitive ? flags.replaceAll('i', '') : `${flags}i`).split(''))).join('');
+        return new RegExp(body, normalizedFlags);
+    }
+    return new RegExp(source, caseSensitive ? '' : 'i');
+}
+
+function messageTextMatches(messageText, config) {
+    if (!config.pattern) {
+        return false;
+    }
+    if (config.mode === 'regex') {
+        try {
+            return parseRegexPattern(config.pattern, config.caseSensitive).test(messageText);
+        } catch (error) {
+            logDebug('Invalid message regex', config.pattern, error);
+            return false;
+        }
+    }
+    const haystack = config.caseSensitive ? messageText : messageText.toLowerCase();
+    const needle = config.caseSensitive ? config.pattern : config.pattern.toLowerCase();
+    return haystack.includes(needle);
+}
+
+function readMessageMatch(value) {
+    const config = normalizeMessageMatchValue(value);
+    const depth = config.scope === 'all'
+        ? chat.length
+        : config.scope === 'recent'
+            ? Math.min(config.depth, chat.length)
+            : Math.min(1, chat.length);
+    const messages = chat.slice(Math.max(0, chat.length - depth));
+    const matched = messages.some(message => (
+        messageMatchesRole(message, config.role)
+        && messageTextMatches(String(message?.mes ?? ''), config)
+    ));
+    return matched ? value : null;
+}
+
+function describeMessageMatch(value) {
+    const config = normalizeMessageMatchValue(value);
+    const mode = config.mode === 'regex' ? 'regex' : 'text';
+    const scope = config.scope === 'all'
+        ? 'whole chat'
+        : config.scope === 'recent'
+            ? `last ${config.depth} messages`
+            : 'last message';
+    const role = messageMatchRoleOptions.find(option => option.id === config.role)?.label || 'Any message';
+    const sensitivity = config.caseSensitive ? ', case sensitive' : '';
+    return `${role} in ${scope} contain ${mode} "${config.pattern}"${sensitivity}`;
 }
 
 function getDomValue(selector) {
@@ -1350,15 +1489,15 @@ registerAdapter({
     listTargets: () => getPromptSettingTargets(),
     listValues: target => getPromptSettingDefinition(parsePromptSettingTarget(target).field)?.values ?? [],
     read: block => {
-        const { identifier, field } = parsePromptSettingTarget(block.target);
-        const prompt = getPrompt(identifier);
+        const { field } = parsePromptSettingTarget(block.target);
+        const prompt = getPrompt(block.target);
         const setting = getPromptSettingDefinition(field);
         const value = prompt?.[field];
         return field === 'injection_trigger' && setting?.display ? setting.display(value) : value;
     },
     write: block => {
-        const { identifier, field } = parsePromptSettingTarget(block.target);
-        const prompt = getPrompt(identifier);
+        const { field } = parsePromptSettingTarget(block.target);
+        const prompt = getPrompt(block.target);
         const setting = getPromptSettingDefinition(field);
         if (!prompt || !setting) {
             warn(`Prompt setting not found: ${getBlockTargetLabel(block)}`);
@@ -1370,6 +1509,7 @@ registerAdapter({
             return false;
         }
         prompt[field] = nextValue;
+        const identifier = resolvePromptIdentifier(block.target);
         promptManager.updatePromptByIdentifier?.(identifier, prompt);
         savePromptManagerSettings();
         return false;
@@ -1508,6 +1648,21 @@ registerAdapter({
     listTargets: () => [makeTarget('group', 'Selected group id')],
     read: () => getContext().groupId ?? '',
     describe: block => `Group id = ${stringifyValue(block.value)}`,
+});
+
+registerAdapter({
+    id: 'chat.messageMatch',
+    category: 'character',
+    label: 'Message contains',
+    icon: 'fa-magnifying-glass',
+    writable: false,
+    valueType: 'custom',
+    listTargets: () => [makeTarget('recent', 'Recent messages')],
+    read: block => readMessageMatch(block.value),
+    renderValuePicker: renderMessageMatchValuePicker,
+    getBuilderValue: getMessageMatchBuilderValue,
+    validateBlock: block => normalizeMessageMatchValue(block.value).pattern ? '' : 'Enter text or regex to match.',
+    describe: block => describeMessageMatch(block.value),
 });
 
 registerAdapter({
@@ -2150,9 +2305,12 @@ function renderTargetAndValuePickers() {
         const targets = adapter.listTargets?.() ?? [];
         if (targets.length > 1) {
             const targetCaption = escapeHtml(adapter.targetCaption || 'Target');
-            const defaultTarget = draft?.adapter === adapter.id
+            let defaultTarget = draft?.adapter === adapter.id
                 ? builderTargetId(draft.target)
                 : String(adapter.getDefaultTarget?.() ?? '');
+            if (adapter.id === 'preset.prompt' && draft?.adapter === adapter.id && draft.target?.matchBy === 'name') {
+                defaultTarget = findPromptIdentifierByName(draft.target.name || draft.target.label) || defaultTarget;
+            }
             targetWrap.removeClass('displayNone').html(`<span><i class="fa-solid fa-crosshairs"></i> ${targetCaption}</span><select id="silly_linkify_block_target" class="text_pole">${renderOptionHtml(targets, defaultTarget)}</select>`);
             const select = document.getElementById('silly_linkify_block_target');
             for (const option of select.options) {
@@ -2250,10 +2408,62 @@ function renderCharacterValuePicker(valueWrap, values, preferredValue = '', sear
     `);
 }
 
+function renderMessageMatchValuePicker(valueWrap, target, draft) {
+    const draftApplies = draft?.adapter === 'chat.messageMatch';
+    const config = normalizeMessageMatchValue(draftApplies ? draft.value : {
+        mode: 'text',
+        pattern: '',
+        scope: 'last',
+        depth: 1,
+        role: 'any',
+        caseSensitive: false,
+    });
+
+    valueWrap.html(`
+        <span><i class="fa-solid fa-magnifying-glass"></i> Message match</span>
+        <div id="silly_linkify_block_value" class="silly-linkify-message-match">
+            <label class="silly-linkify-builder-item">
+                <span>Mode</span>
+                <select class="text_pole silly-linkify-message-field" data-message-field="mode">
+                    <option value="text" ${config.mode === 'text' ? 'selected' : ''}>text</option>
+                    <option value="regex" ${config.mode === 'regex' ? 'selected' : ''}>regex</option>
+                </select>
+            </label>
+            <label class="silly-linkify-builder-item">
+                <span>Pattern</span>
+                <input class="text_pole silly-linkify-message-field" data-message-field="pattern" type="text" value="${escapeHtml(config.pattern)}" placeholder="text or /regex/i">
+            </label>
+            <label class="silly-linkify-builder-item">
+                <span>Search in</span>
+                <select class="text_pole silly-linkify-message-field silly-linkify-message-scope" data-message-field="scope">
+                    ${renderOptionHtml(messageMatchScopeOptions, config.scope)}
+                </select>
+            </label>
+            <label class="silly-linkify-builder-item silly-linkify-message-depth ${config.scope === 'recent' ? '' : 'displayNone'}">
+                <span>Message count</span>
+                <input class="text_pole silly-linkify-message-field" data-message-field="depth" type="number" min="2" step="1" value="${escapeHtml(Math.max(2, config.depth))}">
+            </label>
+            <label class="silly-linkify-builder-item">
+                <span>Role</span>
+                <select class="text_pole silly-linkify-message-field" data-message-field="role">
+                    ${renderOptionHtml(messageMatchRoleOptions, config.role)}
+                </select>
+            </label>
+            <label class="checkbox_label silly-linkify-message-case" for="silly_linkify_message_case_sensitive">
+                <input id="silly_linkify_message_case_sensitive" class="silly-linkify-message-field" data-message-field="caseSensitive" type="checkbox" ${config.caseSensitive ? 'checked' : ''}>
+                <span>Case sensitive</span>
+            </label>
+        </div>
+    `);
+}
+
 function renderPromptValuePicker(valueWrap, target, draft) {
     const promptState = getPromptState(target);
     const draftApplies = draft?.adapter === 'preset.prompt' && builderTargetId(draft.target) === builderTargetId(target);
     const draftValue = draftApplies && draft.value && typeof draft.value === 'object' ? draft.value : {};
+    const matchBy = draftApplies && draft.target && typeof draft.target === 'object'
+        ? draft.target.matchBy || 'identifier'
+        : target?.matchBy || 'identifier';
 
     const fieldControl = setting => {
         const isSelected = Object.hasOwn(draftValue, setting.id);
@@ -2283,6 +2493,13 @@ function renderPromptValuePicker(valueWrap, target, draft) {
     valueWrap.html(`
         <span><i class="fa-solid fa-sliders"></i> Prompt settings</span>
         <div id="silly_linkify_block_value" class="silly-linkify-prompt-settings">
+            <label class="silly-linkify-prompt-match-row">
+                <span>Link prompt by</span>
+                <select id="silly_linkify_prompt_match_by" class="text_pole">
+                    <option value="identifier" ${matchBy === 'identifier' ? 'selected' : ''}>identifier</option>
+                    <option value="name" ${matchBy === 'name' ? 'selected' : ''}>name</option>
+                </select>
+            </label>
             ${promptSettingDefinitions.map(setting => `
                 <label class="silly-linkify-prompt-setting-row">
                     <input class="silly-linkify-prompt-field-enabled" data-prompt-field="${escapeHtml(setting.id)}" type="checkbox" ${Object.hasOwn(draftValue, setting.id) ? 'checked' : ''}>
@@ -2294,7 +2511,23 @@ function renderPromptValuePicker(valueWrap, target, draft) {
     `);
 }
 
-function getBuilderTarget(adapter) {
+function getMessageMatchBuilderValue() {
+    const value = {};
+    $('#silly_linkify_block_value .silly-linkify-message-field').each((_, control) => {
+        const field = String(control.dataset.messageField || '');
+        if (!field) {
+            return;
+        }
+        if (control instanceof HTMLInputElement && control.type === 'checkbox') {
+            value[field] = control.checked;
+            return;
+        }
+        value[field] = $(control).val();
+    });
+    return normalizeMessageMatchValue(value);
+}
+
+function getRawBuilderTarget(adapter) {
     const targetElement = document.getElementById('silly_linkify_block_target');
     if (!targetElement) {
         const targets = adapter.listTargets?.() ?? [];
@@ -2313,6 +2546,21 @@ function getBuilderTarget(adapter) {
     }
 
     return targetElement.value;
+}
+
+function getBuilderTarget(adapter) {
+    const target = getRawBuilderTarget(adapter);
+    if (adapter.id === 'preset.prompt' && target && typeof target === 'object') {
+        const matchBy = String($('#silly_linkify_prompt_match_by').val() || target.matchBy || 'identifier');
+        const identifier = target.identifier || target.id;
+        return {
+            ...target,
+            identifier,
+            name: target.name || target.label || getPromptName(identifier),
+            matchBy,
+        };
+    }
+    return target;
 }
 
 function readCurrentBuilderTarget(adapter) {
@@ -2379,7 +2627,12 @@ function addBuilderBlock() {
         return;
     }
     if (adapter.valueType === 'custom' && (!block.value || !Object.keys(block.value).length)) {
-        warn('Choose at least one prompt setting.');
+        warn('Choose at least one value.');
+        return;
+    }
+    const validationMessage = adapter.validateBlock?.(block);
+    if (validationMessage) {
+        warn(validationMessage);
         return;
     }
 
@@ -2602,6 +2855,12 @@ function bindSettingsHandlers() {
         captureBuilderDraft();
     });
     $('#silly_linkify_block_value_wrap').on('change input', '#silly_linkify_block_value', captureBuilderDraft);
+    $('#silly_linkify_block_value_wrap').on('change input', '#silly_linkify_prompt_match_by', captureBuilderDraft);
+    $('#silly_linkify_block_value_wrap').on('change', '.silly-linkify-message-scope', function () {
+        $('#silly_linkify_block_value_wrap .silly-linkify-message-depth').toggleClass('displayNone', String(this.value) !== 'recent');
+        captureBuilderDraft();
+    });
+    $('#silly_linkify_block_value_wrap').on('change input', '.silly-linkify-message-field', captureBuilderDraft);
     $('#silly_linkify_block_value_wrap').on('change input', '.silly-linkify-prompt-field-value', function () {
         const field = String(this.dataset.promptField || '');
         $(`#silly_linkify_block_value .silly-linkify-prompt-field-enabled[data-prompt-field="${CSS.escape(field)}"]`).prop('checked', true);
@@ -2621,6 +2880,13 @@ function subscribeToEvents() {
         event_types.CHATCOMPLETION_SOURCE_CHANGED,
         event_types.CHATCOMPLETION_MODEL_CHANGED,
         event_types.CHAT_CHANGED,
+        event_types.MESSAGE_SENT,
+        event_types.MESSAGE_RECEIVED,
+        event_types.MESSAGE_UPDATED,
+        event_types.MESSAGE_EDITED,
+        event_types.MESSAGE_SWIPED,
+        event_types.MESSAGE_DELETED,
+        event_types.MORE_MESSAGES_LOADED,
         event_types.CONNECTION_PROFILE_LOADED,
         event_types.SETTINGS_UPDATED,
         event_types.CHARACTER_PAGE_LOADED,
